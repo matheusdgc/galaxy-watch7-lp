@@ -1,19 +1,19 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import gsap from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import Lenis from 'lenis';
-import Loader from './Loader';
 
 gsap.registerPlugin(ScrollTrigger);
 
-const IS_MOBILE = typeof window !== 'undefined' && window.innerWidth <= 768;
-const EXTRACT_FPS = IS_MOBILE ? 8 : 12;
-const MAX_WIDTH = IS_MOBILE ? 1080 : 1920;
 const DPR = typeof window !== 'undefined' ? Math.min(devicePixelRatio, 2) : 1;
+const IS_MOBILE = typeof window !== 'undefined' && window.innerWidth <= 768;
+const EXTRACT_FPS = 12;
+const MAX_WIDTH = IS_MOBILE ? 1080 : 1920;
 const LERP = IS_MOBILE ? 0.18 : 0.12;
 const COVER_ZOOM = IS_MOBILE ? 1.12 : 1;
+const SEEK_TIMEOUT = IS_MOBILE ? 4000 : 3000;
 
 export default function Hero() {
   const sectionRef = useRef<HTMLElement>(null);
@@ -25,10 +25,6 @@ export default function Hero() {
   const currentFrameRef = useRef(0);
   const rafIdRef = useRef<number>(0);
 
-  const [progress, setProgress] = useState(0);
-  const [loaded, setLoaded] = useState(false);
-
-  // Resize display canvas to viewport
   const sizeCanvas = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -42,7 +38,6 @@ export default function Hero() {
     }
   }, []);
 
-  // Paint frame to display canvas (object-fit: cover + zoom on mobile)
   const paintFrame = useCallback((index: number) => {
     const canvas = canvasRef.current;
     const ctx = ctxRef.current;
@@ -64,7 +59,6 @@ export default function Hero() {
       sh = fh; sw = fh * cR; sx = (fw - sw) / 2; sy = 0;
     }
 
-    // Apply zoom: crop source rect inward to fill more
     if (COVER_ZOOM > 1) {
       const zw = sw / COVER_ZOOM;
       const zh = sh / COVER_ZOOM;
@@ -91,13 +85,24 @@ export default function Hero() {
     sizeCanvas();
     window.addEventListener('resize', sizeCanvas);
 
-    // Frame extraction
+    // Seek with timeout — prevents hang on iOS
+    const waitForSeek = () =>
+      new Promise<boolean>((resolve) => {
+        const timer = setTimeout(() => resolve(false), SEEK_TIMEOUT);
+        video.addEventListener(
+          'seeked',
+          () => { clearTimeout(timer); resolve(true); },
+          { once: true },
+        );
+      });
+
     const extractFrames = async () => {
       const duration = video.duration;
+      if (!duration || !isFinite(duration)) return;
+
       const totalFrames = Math.max(1, Math.round(duration * EXTRACT_FPS));
       const interval = duration / totalFrames;
 
-      // Calc capture dimensions (capped to save memory)
       const vw = video.videoWidth;
       const vh = video.videoHeight;
       let capW = vw;
@@ -108,11 +113,19 @@ export default function Hero() {
         capH = Math.round(vh * ratio);
       }
 
+      let consecutiveTimeouts = 0;
+
       for (let i = 0; i < totalFrames; i++) {
         video.currentTime = i * interval;
-        await new Promise<void>((r) =>
-          video.addEventListener('seeked', () => r(), { once: true })
-        );
+        const seeked = await waitForSeek();
+
+        if (!seeked) {
+          consecutiveTimeouts++;
+          // If 3+ consecutive timeouts, seeking is broken — bail
+          if (consecutiveTimeouts >= 3) break;
+          continue;
+        }
+        consecutiveTimeouts = 0;
 
         const off = document.createElement('canvas');
         off.width = capW;
@@ -120,21 +133,17 @@ export default function Hero() {
         off.getContext('2d')!.drawImage(video, 0, 0, capW, capH);
         framesRef.current.push(off);
 
-        // Show first frame + init scroll immediately
-        if (i === 0) {
+        // First frame: paint + start scroll-driven playback
+        if (framesRef.current.length === 1) {
           paintFrame(0);
           initScroll();
-          playEntrance();
+          // Fade in the canvas
+          gsap.fromTo(canvas, { opacity: 0 }, { opacity: 1, duration: 0.6, ease: 'power2.out' });
         }
 
-        const pct = Math.round(((i + 1) / totalFrames) * 100);
-        setProgress(pct);
-
-        // Yield to main thread
+        // Yield to main thread every frame
         await new Promise<void>((r) => requestAnimationFrame(() => r()));
       }
-
-      setLoaded(true);
     };
 
     // ScrollTrigger + render loop
@@ -168,7 +177,6 @@ export default function Hero() {
       tick();
     };
 
-    // GSAP entrance + scroll-driven exit animations
     const playEntrance = () => {
       const blur = (px: number) => IS_MOBILE ? {} : { filter: `blur(${px}px)` };
       const blurClear = IS_MOBILE ? {} : { filter: 'blur(0px)' };
@@ -214,11 +222,24 @@ export default function Hero() {
         .to('#anim-buttons', { y: -30, opacity: 0, ...blur(10), duration: 1, ease: 'none' }, 0.25);
     };
 
-    const onLoaded = () => extractFrames();
-    video.addEventListener('loadeddata', onLoaded);
+    // Play entrance immediately — no waiting for video
+    playEntrance();
+
+    // Start loading — explicit load() for iOS
+    let started = false;
+    const onReady = () => {
+      if (started) return;
+      started = true;
+      extractFrames();
+    };
+    video.addEventListener('loadeddata', onReady);
+    video.addEventListener('canplaythrough', onReady);
+    if (video.readyState >= 2) onReady();
+    video.load(); // Force iOS to start loading
 
     return () => {
-      video.removeEventListener('loadeddata', onLoaded);
+      video.removeEventListener('loadeddata', onReady);
+      video.removeEventListener('canplaythrough', onReady);
       window.removeEventListener('resize', sizeCanvas);
       cancelAnimationFrame(rafIdRef.current);
       gsap.ticker.remove(tickerId as unknown as gsap.TickerCallback);
@@ -229,8 +250,6 @@ export default function Hero() {
 
   return (
     <>
-      <Loader progress={progress} visible={!loaded} />
-
       <section ref={sectionRef} id="hero" className="relative h-[300vh]">
         <div className="sticky top-0 h-screen overflow-hidden">
           {/* Hidden video — decode source */}
@@ -239,13 +258,15 @@ export default function Hero() {
             muted
             playsInline
             preload="auto"
-            className="absolute opacity-0 pointer-events-none w-0 h-0"
+            crossOrigin="anonymous"
+            className="fixed -left-full top-0 w-px h-px opacity-0 pointer-events-none"
           >
+            <source src="/relogio-video2.webm" type="video/webm" />
             <source src="/relogio-video2.mp4" type="video/mp4" />
           </video>
 
-          {/* Display canvas — fullscreen */}
-          <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
+          {/* Display canvas — fullscreen, starts transparent */}
+          <canvas ref={canvasRef} className="absolute inset-0 w-full h-full opacity-0" />
 
           {/* Gradient overlay */}
           <div

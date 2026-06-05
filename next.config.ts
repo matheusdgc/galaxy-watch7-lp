@@ -8,6 +8,14 @@ const nextConfig: NextConfig = {
   },
   compress: true,
   poweredByHeader: false,
+  headers: async () => [
+    {
+      source: '/:path*.(mp4|webm)',
+      headers: [
+        { key: 'Cache-Control', value: 'public, max-age=31536000, immutable' },
+      ],
+    },
+  ],
 };
 
 export default nextConfig;
