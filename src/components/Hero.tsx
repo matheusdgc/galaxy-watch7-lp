@@ -229,7 +229,7 @@ export default function Hero() {
           </video>
 
           {/* Display canvas — fullscreen */}
-          <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
+          <canvas ref={canvasRef} className="absolute inset-0 w-full h-full max-md:scale-110" style={{ backgroundColor: '#0a0a0b' }} />
 
           {/* Gradient overlay */}
           <div
