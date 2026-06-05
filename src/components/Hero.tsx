@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import gsap from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import Lenis from 'lenis';
+import Loader from './Loader';
 
 gsap.registerPlugin(ScrollTrigger);
 
@@ -24,6 +25,9 @@ export default function Hero() {
   const scrollProgressRef = useRef(0);
   const currentFrameRef = useRef(0);
   const rafIdRef = useRef<number>(0);
+
+  const [progress, setProgress] = useState(0);
+  const [loaded, setLoaded] = useState(false);
 
   const sizeCanvas = useCallback(() => {
     const canvas = canvasRef.current;
@@ -137,13 +141,19 @@ export default function Hero() {
         if (framesRef.current.length === 1) {
           paintFrame(0);
           initScroll();
-          // Fade in the canvas
-          gsap.fromTo(canvas, { opacity: 0 }, { opacity: 1, duration: 0.6, ease: 'power2.out' });
         }
+
+        const pct = Math.round(((i + 1) / totalFrames) * 100);
+        setProgress(pct);
 
         // Yield to main thread every frame
         await new Promise<void>((r) => requestAnimationFrame(() => r()));
       }
+
+      // All frames ready — reveal
+      setLoaded(true);
+      gsap.fromTo(canvas, { opacity: 0 }, { opacity: 1, duration: 0.6, ease: 'power2.out' });
+      playEntrance();
     };
 
     // ScrollTrigger + render loop
@@ -222,9 +232,6 @@ export default function Hero() {
         .to('#anim-buttons', { y: -30, opacity: 0, ...blur(10), duration: 1, ease: 'none' }, 0.25);
     };
 
-    // Play entrance immediately — no waiting for video
-    playEntrance();
-
     // Start loading — explicit load() for iOS
     let started = false;
     const onReady = () => {
@@ -250,6 +257,8 @@ export default function Hero() {
 
   return (
     <>
+      <Loader progress={progress} visible={!loaded} />
+
       <section ref={sectionRef} id="hero" className="relative h-[300vh]">
         <div className="sticky top-0 h-screen overflow-hidden">
           {/* Hidden video — decode source */}
