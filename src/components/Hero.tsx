@@ -8,14 +8,18 @@ import Loader from './Loader';
 
 gsap.registerPlugin(ScrollTrigger);
 
-const EXTRACT_FPS = 12;
-const MAX_WIDTH = 1920;
-const LERP = 0.12;
+const IS_MOBILE = typeof window !== 'undefined' && window.innerWidth <= 768;
+const EXTRACT_FPS = IS_MOBILE ? 8 : 12;
+const MAX_WIDTH = IS_MOBILE ? 1080 : 1920;
+const DPR = typeof window !== 'undefined' ? Math.min(devicePixelRatio, 2) : 1;
+const LERP = IS_MOBILE ? 0.18 : 0.12;
+const COVER_ZOOM = IS_MOBILE ? 1.12 : 1;
 
 export default function Hero() {
   const sectionRef = useRef<HTMLElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
   const framesRef = useRef<HTMLCanvasElement[]>([]);
   const scrollProgressRef = useRef(0);
   const currentFrameRef = useRef(0);
@@ -28,8 +32,9 @@ export default function Hero() {
   const sizeCanvas = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    canvas.width = window.innerWidth * devicePixelRatio;
-    canvas.height = window.innerHeight * devicePixelRatio;
+    canvas.width = window.innerWidth * DPR;
+    canvas.height = window.innerHeight * DPR;
+    ctxRef.current = canvas.getContext('2d', { alpha: false });
 
     const frames = framesRef.current;
     if (frames.length) {
@@ -37,14 +42,12 @@ export default function Hero() {
     }
   }, []);
 
-  // Paint frame to display canvas (object-fit: cover)
+  // Paint frame to display canvas (object-fit: cover + zoom on mobile)
   const paintFrame = useCallback((index: number) => {
     const canvas = canvasRef.current;
+    const ctx = ctxRef.current;
     const frames = framesRef.current;
-    if (!canvas || !frames.length) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    if (!canvas || !ctx || !frames.length) return;
 
     const frame = frames[Math.max(0, Math.min(index, frames.length - 1))];
     const cw = canvas.width;
@@ -59,6 +62,16 @@ export default function Hero() {
       sw = fw; sh = fw / cR; sx = 0; sy = (fh - sh) / 2;
     } else {
       sh = fh; sw = fh * cR; sx = (fw - sw) / 2; sy = 0;
+    }
+
+    // Apply zoom: crop source rect inward to fill more
+    if (COVER_ZOOM > 1) {
+      const zw = sw / COVER_ZOOM;
+      const zh = sh / COVER_ZOOM;
+      sx += (sw - zw) / 2;
+      sy += (sh - zh) / 2;
+      sw = zw;
+      sh = zh;
     }
 
     ctx.drawImage(frame, sx, sy, sw, sh, 0, 0, cw, ch);
@@ -157,25 +170,28 @@ export default function Hero() {
 
     // GSAP entrance + scroll-driven exit animations
     const playEntrance = () => {
+      const blur = (px: number) => IS_MOBILE ? {} : { filter: `blur(${px}px)` };
+      const blurClear = IS_MOBILE ? {} : { filter: 'blur(0px)' };
+
       const intro = gsap.timeline({ delay: 0.2 });
       intro
         .fromTo('#anim-section',
-          { y: 20, opacity: 0, filter: 'blur(8px)' },
-          { y: 0, opacity: 1, filter: 'blur(0px)', duration: 0.8, ease: 'power3.out' }
+          { y: 20, opacity: 0, ...blur(8) },
+          { y: 0, opacity: 1, ...blurClear, duration: 0.8, ease: 'power3.out' }
         )
         .fromTo(['#anim-line1', '#anim-line2', '#anim-line3'],
-          { y: 40, opacity: 0, filter: 'blur(10px)' },
-          { y: 0, opacity: 1, filter: 'blur(0px)', duration: 0.9, stagger: 0.15, ease: 'power3.out' },
+          { y: 40, opacity: 0, ...blur(10) },
+          { y: 0, opacity: 1, ...blurClear, duration: 0.9, stagger: 0.15, ease: 'power3.out' },
           '-=0.4'
         )
         .fromTo('#anim-subtitle',
-          { y: 20, opacity: 0, filter: 'blur(8px)' },
-          { y: 0, opacity: 1, filter: 'blur(0px)', duration: 0.8, ease: 'power3.out' },
+          { y: 20, opacity: 0, ...blur(8) },
+          { y: 0, opacity: 1, ...blurClear, duration: 0.8, ease: 'power3.out' },
           '-=0.3'
         )
         .fromTo('#anim-buttons',
-          { y: 30, opacity: 0, filter: 'blur(8px)' },
-          { y: 0, opacity: 1, filter: 'blur(0px)', duration: 0.8, ease: 'power3.out' },
+          { y: 30, opacity: 0, ...blur(8) },
+          { y: 0, opacity: 1, ...blurClear, duration: 0.8, ease: 'power3.out' },
           '-=0.3'
         );
 
@@ -190,12 +206,12 @@ export default function Hero() {
       });
 
       exitTl
-        .to('#anim-section', { y: -25, opacity: 0, filter: 'blur(10px)', duration: 1, ease: 'none' }, 0)
-        .to('#anim-line1', { y: -40, opacity: 0, filter: 'blur(12px)', duration: 1, ease: 'none' }, 0.05)
-        .to('#anim-line2', { y: -40, opacity: 0, filter: 'blur(12px)', duration: 1, ease: 'none' }, 0.1)
-        .to('#anim-line3', { y: -40, opacity: 0, filter: 'blur(12px)', duration: 1, ease: 'none' }, 0.15)
-        .to('#anim-subtitle', { y: -25, opacity: 0, filter: 'blur(10px)', duration: 1, ease: 'none' }, 0.2)
-        .to('#anim-buttons', { y: -30, opacity: 0, filter: 'blur(10px)', duration: 1, ease: 'none' }, 0.25);
+        .to('#anim-section', { y: -25, opacity: 0, ...blur(10), duration: 1, ease: 'none' }, 0)
+        .to('#anim-line1', { y: -40, opacity: 0, ...blur(12), duration: 1, ease: 'none' }, 0.05)
+        .to('#anim-line2', { y: -40, opacity: 0, ...blur(12), duration: 1, ease: 'none' }, 0.1)
+        .to('#anim-line3', { y: -40, opacity: 0, ...blur(12), duration: 1, ease: 'none' }, 0.15)
+        .to('#anim-subtitle', { y: -25, opacity: 0, ...blur(10), duration: 1, ease: 'none' }, 0.2)
+        .to('#anim-buttons', { y: -30, opacity: 0, ...blur(10), duration: 1, ease: 'none' }, 0.25);
     };
 
     const onLoaded = () => extractFrames();
@@ -229,7 +245,7 @@ export default function Hero() {
           </video>
 
           {/* Display canvas — fullscreen */}
-          <canvas ref={canvasRef} className="absolute inset-0 w-full h-full max-md:scale-110" style={{ backgroundColor: '#0a0a0b' }} />
+          <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
 
           {/* Gradient overlay */}
           <div
