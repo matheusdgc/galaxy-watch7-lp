@@ -10,18 +10,15 @@ gsap.registerPlugin(ScrollTrigger);
 
 const DPR = typeof window !== 'undefined' ? Math.min(devicePixelRatio, 2) : 1;
 const IS_MOBILE = typeof window !== 'undefined' && window.innerWidth <= 768;
-const EXTRACT_FPS = 12;
-const MAX_WIDTH = IS_MOBILE ? 1080 : 1920;
+const TOTAL_FRAMES = 96;
 const LERP = IS_MOBILE ? 0.18 : 0.12;
 const COVER_ZOOM = IS_MOBILE ? 1.12 : 1;
-const SEEK_TIMEOUT = IS_MOBILE ? 4000 : 3000;
 
 export default function Hero() {
   const sectionRef = useRef<HTMLElement>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
-  const framesRef = useRef<HTMLCanvasElement[]>([]);
+  const imagesRef = useRef<HTMLImageElement[]>([]);
   const scrollProgressRef = useRef(0);
   const currentFrameRef = useRef(0);
   const rafIdRef = useRef<number>(0);
@@ -36,31 +33,32 @@ export default function Hero() {
     canvas.height = window.innerHeight * DPR;
     ctxRef.current = canvas.getContext('2d', { alpha: false });
 
-    const frames = framesRef.current;
-    if (frames.length) {
-      paintFrame(Math.round(scrollProgressRef.current * (frames.length - 1)));
+    if (imagesRef.current.length) {
+      paintFrame(Math.round(scrollProgressRef.current * (imagesRef.current.length - 1)));
     }
   }, []);
 
   const paintFrame = useCallback((index: number) => {
     const canvas = canvasRef.current;
     const ctx = ctxRef.current;
-    const frames = framesRef.current;
-    if (!canvas || !ctx || !frames.length) return;
+    const images = imagesRef.current;
+    if (!canvas || !ctx || !images.length) return;
 
-    const frame = frames[Math.max(0, Math.min(index, frames.length - 1))];
+    const img = images[Math.max(0, Math.min(index, images.length - 1))];
+    if (!img.complete || !img.naturalWidth) return;
+
     const cw = canvas.width;
     const ch = canvas.height;
-    const fw = frame.width;
-    const fh = frame.height;
-    const fR = fw / fh;
+    const iw = img.naturalWidth;
+    const ih = img.naturalHeight;
+    const iR = iw / ih;
     const cR = cw / ch;
 
     let sx: number, sy: number, sw: number, sh: number;
-    if (cR > fR) {
-      sw = fw; sh = fw / cR; sx = 0; sy = (fh - sh) / 2;
+    if (cR > iR) {
+      sw = iw; sh = iw / cR; sx = 0; sy = (ih - sh) / 2;
     } else {
-      sh = fh; sw = fh * cR; sx = (fw - sw) / 2; sy = 0;
+      sh = ih; sw = ih * cR; sx = (iw - sw) / 2; sy = 0;
     }
 
     if (COVER_ZOOM > 1) {
@@ -72,13 +70,12 @@ export default function Hero() {
       sh = zh;
     }
 
-    ctx.drawImage(frame, sx, sy, sw, sh, 0, 0, cw, ch);
+    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, cw, ch);
   }, []);
 
   useEffect(() => {
-    const video = videoRef.current;
     const canvas = canvasRef.current;
-    if (!video || !canvas) return;
+    if (!canvas) return;
 
     // Lenis smooth scroll
     const lenis = new Lenis();
@@ -89,72 +86,47 @@ export default function Hero() {
     sizeCanvas();
     window.addEventListener('resize', sizeCanvas);
 
-    // Seek with timeout — prevents hang on iOS
-    const waitForSeek = () =>
-      new Promise<boolean>((resolve) => {
-        const timer = setTimeout(() => resolve(false), SEEK_TIMEOUT);
-        video.addEventListener(
-          'seeked',
-          () => { clearTimeout(timer); resolve(true); },
-          { once: true },
-        );
-      });
+    // Preload all frame images
+    let loadedCount = 0;
+    const images: HTMLImageElement[] = [];
 
-    const extractFrames = async () => {
-      const duration = video.duration;
-      if (!duration || !isFinite(duration)) return;
+    for (let i = 1; i <= TOTAL_FRAMES; i++) {
+      const img = new Image();
+      img.src = `/frames/frame_${String(i).padStart(3, '0')}.webp`;
+      images.push(img);
 
-      const totalFrames = Math.max(1, Math.round(duration * EXTRACT_FPS));
-      const interval = duration / totalFrames;
+      img.onload = () => {
+        loadedCount++;
+        setProgress(Math.round((loadedCount / TOTAL_FRAMES) * 100));
 
-      const vw = video.videoWidth;
-      const vh = video.videoHeight;
-      let capW = vw;
-      let capH = vh;
-      if (vw > MAX_WIDTH) {
-        const ratio = MAX_WIDTH / vw;
-        capW = MAX_WIDTH;
-        capH = Math.round(vh * ratio);
-      }
-
-      let consecutiveTimeouts = 0;
-
-      for (let i = 0; i < totalFrames; i++) {
-        video.currentTime = i * interval;
-        const seeked = await waitForSeek();
-
-        if (!seeked) {
-          consecutiveTimeouts++;
-          // If 3+ consecutive timeouts, seeking is broken — bail
-          if (consecutiveTimeouts >= 3) break;
-          continue;
-        }
-        consecutiveTimeouts = 0;
-
-        const off = document.createElement('canvas');
-        off.width = capW;
-        off.height = capH;
-        off.getContext('2d')!.drawImage(video, 0, 0, capW, capH);
-        framesRef.current.push(off);
-
-        // First frame: paint + start scroll-driven playback
-        if (framesRef.current.length === 1) {
+        // Paint first frame as soon as it loads
+        if (i === 1) {
+          imagesRef.current = images;
           paintFrame(0);
-          initScroll();
         }
 
-        const pct = Math.round(((i + 1) / totalFrames) * 100);
-        setProgress(pct);
+        if (loadedCount === TOTAL_FRAMES) {
+          imagesRef.current = images;
+          setLoaded(true);
+          initScroll();
+          gsap.fromTo(canvas, { opacity: 0 }, { opacity: 1, duration: 0.6, ease: 'power2.out' });
+          playEntrance();
+        }
+      };
 
-        // Yield to main thread every frame
-        await new Promise<void>((r) => requestAnimationFrame(() => r()));
-      }
-
-      // All frames ready — reveal
-      setLoaded(true);
-      gsap.fromTo(canvas, { opacity: 0 }, { opacity: 1, duration: 0.6, ease: 'power2.out' });
-      playEntrance();
-    };
+      img.onerror = () => {
+        // Count errors as loaded to avoid hanging
+        loadedCount++;
+        setProgress(Math.round((loadedCount / TOTAL_FRAMES) * 100));
+        if (loadedCount === TOTAL_FRAMES) {
+          imagesRef.current = images;
+          setLoaded(true);
+          initScroll();
+          gsap.fromTo(canvas, { opacity: 0 }, { opacity: 1, duration: 0.6, ease: 'power2.out' });
+          playEntrance();
+        }
+      };
+    }
 
     // ScrollTrigger + render loop
     const initScroll = () => {
@@ -172,8 +144,8 @@ export default function Hero() {
 
       const tick = () => {
         rafIdRef.current = requestAnimationFrame(tick);
-        const frames = framesRef.current;
-        const maxIdx = frames.length - 1;
+        const imgs = imagesRef.current;
+        const maxIdx = imgs.length - 1;
         if (maxIdx < 0) return;
 
         const targetFrame = scrollProgressRef.current * maxIdx;
@@ -232,21 +204,7 @@ export default function Hero() {
         .to('#anim-buttons', { y: -30, opacity: 0, ...blur(10), duration: 1, ease: 'none' }, 0.25);
     };
 
-    // Start loading — explicit load() for iOS
-    let started = false;
-    const onReady = () => {
-      if (started) return;
-      started = true;
-      extractFrames();
-    };
-    video.addEventListener('loadeddata', onReady);
-    video.addEventListener('canplaythrough', onReady);
-    if (video.readyState >= 2) onReady();
-    video.load(); // Force iOS to start loading
-
     return () => {
-      video.removeEventListener('loadeddata', onReady);
-      video.removeEventListener('canplaythrough', onReady);
       window.removeEventListener('resize', sizeCanvas);
       cancelAnimationFrame(rafIdRef.current);
       gsap.ticker.remove(tickerId as unknown as gsap.TickerCallback);
@@ -261,19 +219,6 @@ export default function Hero() {
 
       <section ref={sectionRef} id="hero" className="relative h-[300vh]">
         <div className="sticky top-0 h-screen overflow-hidden">
-          {/* Hidden video — decode source */}
-          <video
-            ref={videoRef}
-            muted
-            playsInline
-            preload="auto"
-            crossOrigin="anonymous"
-            className="fixed -left-full top-0 w-px h-px opacity-0 pointer-events-none"
-          >
-            <source src="/relogio-video2.webm" type="video/webm" />
-            <source src="/relogio-video2.mp4" type="video/mp4" />
-          </video>
-
           {/* Display canvas — fullscreen, starts transparent */}
           <canvas ref={canvasRef} className="absolute inset-0 w-full h-full opacity-0" />
 
